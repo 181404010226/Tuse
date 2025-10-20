@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>颜色分界线坐标标注工具</title>
+<style>
+  body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+  #controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  canvas { border: 1px solid #ccc; margin-right: 12px; }
+  #canvasWrap { position: relative; display: inline-block; }
+  #overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
+  #result { max-height: 300px; overflow: auto; border: 1px solid #eee; padding: 8px; margin-top: 12px; white-space: pre; background: #fafafa; }
+  label { font-size: 14px; }
+  button { padding: 6px 10px; }
+  .small { font-size: 12px; color: #666; }
+</style>
+</head>
+<body>
+<h2>颜色分界线坐标标注工具</h2>
+<div id="controls">
+  <input type="file" id="file" accept="image/*" />
+  <label>阈值 <input type="number" id="tol" value="0" min="0" max="255" step="1" /></label>
+  <button id="detect">检测分界线</button>
+  <button id="clear">清除标注</button>
+  <button id="download">下载坐标(JSON)</button>
+  <span class="small">说明：坐标单位为像素，x为距左边，y为距顶边。</span>
+</div>
+<div id="canvasWrap">
+  <canvas id="canvas"></canvas>
+  <canvas id="overlay"></canvas>
+</div>
+<div id="summary"></div>
+<div id="result"></div>
+
+<script>
+const fileInput = document.getElementById('file');
+const tolInput = document.getElementById('tol');
+const detectBtn = document.getElementById('detect');
+const clearBtn = document.getElementById('clear');
+const downloadBtn = document.getElementById('download');
+const canvas = document.getElementById('canvas');
+const overlay = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+const octx = overlay.getContext('2d');
+const resultEl = document.getElementById('result');
+const summaryEl = document.getElementById('summary');
+
+let imageData = null;
+let segments = { vertical: [], horizontal: [] };
+
+function loadImage(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      overlay.width = img.width;
+      overlay.height = img.height;
+      octx.clearRect(0,0,overlay.width, overlay.height);
+      ctx.clearRect(0,0,canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      summaryEl.textContent = `图片尺寸：${img.width}×${img.height}`;
+      resultEl.textContent = '';
+      segments = { vertical: [], horizontal: [] };
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) loadImage(file);
+});
+
+clearBtn.addEventListener('click', () => {
+  octx.clearRect(0,0,overlay.width, overlay.height);
+  resultEl.textContent = '';
+  segments = { vertical: [], horizontal: [] };
+});
+
+detectBtn.addEventListener('click', () => {
+  if (!imageData) {
+    alert('请先选择图片');
+    return;
+  }
+  const tol = Number(tolInput.value) || 0;
+  segments = detectBoundaries(imageData, tol);
+  drawSegments(segments);
+  renderResults(segments);
+});
+
+downloadBtn.addEventListener('click', () => {
+  if (!segments.vertical.length && !segments.horizontal.length) {
+    alert('暂无可下载的坐标，请先检测。');
+    return;
+  }
+  const blob = new Blob([JSON.stringify(segments, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'color-boundaries.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+function colorDiff(data, idxA, idxB) {
+  const dr = data[idxA] - data[idxB];
+  const dg = data[idxA+1] - data[idxB+1];
+  const db = data[idxA+2] - data[idxB+2];
+  const da = data[idxA+3] - data[idxB+3];
+  return Math.abs(dr) + Math.abs(dg) + Math.abs(db) + Math.abs(da);
+}
+
+function detectBoundaries(imgData, tol) {
+  const { width: w, height: h, data } = imgData;
+  const verticalEdge = Array.from({length: w}, () => new Uint8Array(h));
+  const horizontalEdge = Array.from({length: h}, () => new Uint8Array(w));
+
+  // 左右差异 -> 垂直分界线（x固定）
+  for (let y = 0; y < h; y++) {
+    for (let x = 1; x < w; x++) {
+      const idx = (y*w + x) * 4;
+      const idxL = (y*w + (x-1)) * 4;
+      if (colorDiff(data, idx, idxL) > tol) {
+        verticalEdge[x][y] = 1;
+      }
+    }
+  }
+
+  // 上下差异 -> 水平分界线（y固定）
+  for (let y = 1; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y*w + x) * 4;
+      const idxU = ((y-1)*w + x) * 4;
+      if (colorDiff(data, idx, idxU) > tol) {
+        horizontalEdge[y][x] = 1;
+      }
+    }
+  }
+
+  const verticalSegments = [];
+  for (let x = 0; x < w; x++) {
+    let y = 0;
+    while (y < h) {
+      while (y < h && !verticalEdge[x][y]) y++;
+      if (y >= h) break;
+      const startY = y;
+      while (y < h && verticalEdge[x][y]) y++;
+      const endY = y - 1;
+      verticalSegments.push({ type: 'vertical', x, yStart: startY, yEnd: endY });
+    }
+  }
+
+  const horizontalSegments = [];
+  for (let y = 0; y < h; y++) {
+    let x = 0;
+    while (x < w) {
+      while (x < w && !horizontalEdge[y][x]) x++;
+      if (x >= w) break;
+      const startX = x;
+      while (x < w && horizontalEdge[y][x]) x++;
+      const endX = x - 1;
+      horizontalSegments.push({ type: 'horizontal', y, xStart: startX, xEnd: endX });
+    }
+  }
+
+  return { vertical: verticalSegments, horizontal: horizontalSegments };
+}
+
+function drawSegments({ vertical, horizontal }) {
+  octx.clearRect(0,0,overlay.width, overlay.height);
+  octx.lineWidth = 1;
+
+  // 垂直线为红色
+  octx.strokeStyle = 'rgba(255,0,0,0.8)';
+  vertical.forEach(seg => {
+    octx.beginPath();
+    octx.moveTo(seg.x + 0.5, seg.yStart);
+    octx.lineTo(seg.x + 0.5, seg.yEnd);
+    octx.stroke();
+  });
+
+  // 水平线为蓝色
+  octx.strokeStyle = 'rgba(0,120,255,0.8)';
+  horizontal.forEach(seg => {
+    octx.beginPath();
+    octx.moveTo(seg.xStart, seg.y + 0.5);
+    octx.lineTo(seg.xEnd, seg.y + 0.5);
+    octx.stroke();
+  });
+}
+
+function renderResults({ vertical, horizontal }) {
+  const lines = [];
+  lines.push(`垂直分界线段：${vertical.length} 条`);
+  vertical.forEach((seg, i) => {
+    lines.push(`V${i+1}: x=${seg.x}, yStart=${seg.yStart}, yEnd=${seg.yEnd}`);
+  });
+  lines.push('');
+  lines.push(`水平分界线段：${horizontal.length} 条`);
+  horizontal.forEach((seg, i) => {
+    lines.push(`H${i+1}: y=${seg.y}, xStart=${seg.xStart}, xEnd=${seg.xEnd}`);
+  });
+  resultEl.textContent = lines.join('\n');
+}
+</script>
+</body>
+</html>
