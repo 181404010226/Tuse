@@ -22,17 +22,17 @@ export class SIJIWUYU_CustomMask extends Component {
     public autoUpdate: boolean = true;
 
     @property({
-        tooltip: '在编辑器中显示预览矩形'
+        tooltip: '在编辑器中显示预览（多边形描边）'
     })
     public previewEnabled: boolean = true;
 
     @property({
-        tooltip: '预览矩形颜色'
+        tooltip: '预览线颜色'
     })
     public previewColor: Color = new Color(0, 255, 0, 255);
 
     @property({
-        tooltip: '预览矩形线宽'
+        tooltip: '预览线宽'
     })
     public previewLineWidth: number = 20;
 
@@ -331,26 +331,19 @@ export class SIJIWUYU_CustomMask extends Component {
         if (!EDITOR || !this.previewEnabled) return;
         this.ensurePreviewGraphics();
         if (!this._previewGraphics) return;
-        
+
         this._previewGraphics.clear();
-        if (!positions || positions.length === 0) return;
-        
-        let minX = positions[0].x, maxX = positions[0].x;
-        let minY = positions[0].y, maxY = positions[0].y;
-        for (let i = 1; i < positions.length; i++) {
-            const p = positions[i];
-            if (p.x < minX) minX = p.x;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
-        }
-        const width = maxX - minX;
-        const height = maxY - minY;
-        
-        // 绘制矩形边框
+        if (!positions || positions.length < 2) return;
+
+        // 绘制多边形描边（按节点顺序连接并闭合）
         this._previewGraphics.lineWidth = this.previewLineWidth;
         this._previewGraphics.strokeColor = this.previewColor;
-        this._previewGraphics.rect(minX, minY, width, height);
+
+        this._previewGraphics.moveTo(positions[0].x, positions[0].y);
+        for (let i = 1; i < positions.length; i++) {
+            this._previewGraphics.lineTo(positions[i].x, positions[i].y);
+        }
+        this._previewGraphics.close();
         this._previewGraphics.stroke();
     }
 

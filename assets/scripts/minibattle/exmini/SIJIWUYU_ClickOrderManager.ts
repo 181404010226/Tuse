@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, v3, find, director, instantiate } from 'cc';
+import { _decorator, Component, Node, v3, find, instantiate } from 'cc';
 import { SIJIWUYU_MoveOnClick } from './SIJIWUYU_MoveOnClick';
 const { ccclass, property } = _decorator;
 
@@ -9,6 +9,9 @@ export class SIJIWUYU_ClickOrderManager extends Component {
 
     @property
     autoCollectOnStart: boolean = true; // 启动时自动收集场景中的 MoveOnClick 组件
+
+    @property(Node)
+    collectRoot: Node | null = null; // 自动收集的根节点，若为空则使用当前组件节点
 
     @property(Node)
     successNode: Node | null = null;
@@ -27,10 +30,8 @@ export class SIJIWUYU_ClickOrderManager extends Component {
 
     start() {
         if (this.autoCollectOnStart && this.moveItems.length === 0) {
-            const scene = director.getScene();
-            if (scene) {
-                this.moveItems = scene.getComponentsInChildren(SIJIWUYU_MoveOnClick);
-            }
+            const root = this.collectRoot ?? this.node;
+            this.moveItems = root.getComponentsInChildren(SIJIWUYU_MoveOnClick);
         }
         this.bindEvents();
     }
